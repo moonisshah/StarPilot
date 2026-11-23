@@ -1,0 +1,46 @@
+diff --git a/openpilot/selfdrive/modeld/modeld.py b/openpilot/selfdrive/modeld/modeld.py
+index fbb00af1..e818b127 100755
+--- a/openpilot/selfdrive/modeld/modeld.py
++++ b/openpilot/selfdrive/modeld/modeld.py
+@@ -54,6 +54,7 @@ from openpilot.starpilot.models.status import ModelVariant
+ from openpilot.starpilot.models.startup import report_load_timeout, wait_for_chestnut_power
+ from openpilot.starpilot.models.recovery import STARTUP_FALLBACK_EXIT
+ from openpilot.starpilot.navigation.intent import TurnIntent, matching_turn_signal
++from openpilot.starpilot.navigation.wire import navigation_state
+ from openpilot.starpilot.models.catalog import BUNDLED_CURRENT, BY_ID, DEFAULT_SMALL, DEFAULT_SMALL_SHA256
+ from openpilot.starpilot.models.runner import CatalogModelState, load_verified_model
+ from openpilot.starpilot.models import jetlink_adapter
+@@ -520,6 +521,7 @@ def main(demo=False):
+   lane_clock_guard = ClockEpochGuard(initial_mono_ns, initial_boot_ns, initial_skew_ns)
+   DH = DesireHelper(runtime_lane_policy)
+   navigation_turn = TurnIntent(params, CP)
++  last_route_trace = None
+   lane_status_session = uuid.uuid4().hex
+   lane_status_sequence = 0
+ 
+@@ -652,6 +654,25 @@ def main(demo=False):
+         receipt_owner.loaded(small_prepared, ModelVariant.SMALL, model_id=small_model.model_id)
+       cloudlog.event("jetlinkHandover", state=HOOKS.state(model), handovers=model.handovers)
+ 
++    if model_output is not None:
++      nav = navigation_state(sm['starpilotNavigation'])
++      direction = str(nav.instruction.maneuverModifier) if nav is not None and nav.enabled and nav.status == 'guiding' and nav.instruction.maneuverType == 'turn' else ''
++      if direction:
++        cs = sm['carState']
++        trace = dict(direction=direction, admitted=navigation_turn.key is not None, held=navigation_turn.stop_hold,
++                     modelStop=bool(prev_action.shouldStop), plannerStop=bool(sm['longitudinalPlan'].shouldStop),
++                     standstill=bool(cs.standstill), lateralActive=bool(sm['carControl'].latActive), supported=bool(turn_supported),
++                     leftSignal=bool(cs.leftBlinker), rightSignal=bool(cs.rightBlinker),
++                     leftBlindspot=bool(cs.leftBlindspot), rightBlindspot=bool(cs.rightBlindspot),
++                     priorDesire=int(DH.desire), inputDesire=int(desire))
++        if trace != last_route_trace:
++          cloudlog.event("routeTurnTrace", frame=int(meta_main.frame_id), distanceMeters=float(nav.instruction.distanceMeters),
++                         speedMS=float(cs.vEgo), **trace)
++        last_route_trace = trace
++      elif last_route_trace is not None:
++        cloudlog.event("routeTurnTrace", frame=int(meta_main.frame_id), direction="ended")
++        last_route_trace = None
++
+     if model_output is not None and vipc_dropped_frames == 0:
+       modelv2_send = messaging.new_message('modelV2')
+       drivingdata_send = messaging.new_message('drivingModelData')
